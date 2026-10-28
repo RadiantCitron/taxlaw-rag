@@ -1,0 +1,22 @@
+# gitleaks: block secrets on commit and again before push
+# Install hooks:  pre-commit install --hook-type pre-commit --hook-type pre-push
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks-commit
+        name: gitleaks (pre-commit)
+        entry: gitleaks protect --verbose --redact --staged
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
+
+      - id: gitleaks-push
+        name: gitleaks (pre-push)
+        entry: gitleaks protect --verbose --redact
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

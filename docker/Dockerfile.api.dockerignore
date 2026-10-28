@@ -1,0 +1,15 @@
+# Dockerfile.api 전용 제외 목록 (BuildKit이 Dockerfile 이름 + .dockerignore 파일을 우선 적용)
+# 대용량 덤프·원본 코퍼스·비밀값·개발 산출물은 api 빌드 컨텍스트로 보내지 않는다.
+raw_data
+data
+models
+logs
+docs
+tests
+.git
+.venv
+.env
+.env.*
+**/__pycache__
+*.dump
+*.log

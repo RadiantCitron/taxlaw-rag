@@ -1,0 +1,61 @@
+# 1. 윈도우 CPU 전용 실행 파일 저장소 주소 강제 선언 (필수)
+#pip install llama-cpp-python 
+# --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu   
+
+# 2. Python 3.13 환경에 맞는 패키지 버전 선언
+llama-cpp-python
+
+# ---------------- 웹 서버 ----------------
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+pydantic>=2.5,<3.0
+python-dotenv>=1.0
+
+# ---------------- 데이터베이스 ----------------
+# pgvector + pg_trgm 확장 필요 → database/init.sql 실행할 것
+psycopg2-binary>=2.9,<3.0
+# 선택: general_settings.use_graphdb=true 일 때만
+neo4j>=5.14,<6.0
+
+# ---------------- LLM ----------------
+# OpenRouter 는 OpenAI 호환 클라이언트로 호출한다 (llm_handler.OPENROUTER_BASE_URL)
+openai>=1.12,<2.0
+# 선택: DEFAULT_LLM=local:*.gguf 일 때만. 설치가 무겁다.
+llama-cpp-python>=0.2.70
+
+# ---------------- 임베딩 / 리랭커 ----------------
+#  이 3개는 메이저 버전 간 API 가 깨진다. 상한을 반드시 유지할 것.
+llama-index-embeddings-huggingface>=0.2,<0.4
+sentence-transformers>=3.0,<4.0
+torch>=2.2
+#numpy>=1.26,<3.0
+numpy>=2.0,<3.0
+# ---------------- 평가 ----------------
+deepeval>=1.0,<3.0
+# Windows: deepeval CLI/캐시를 직접 쓸 때 portalocker 공유 잠금용 (API 평가는 write_cache=False)
+pywin32>=306; sys_platform == "win32"
+
+# ---------------- 문서 파서 ----------------
+# 03_build_tax_amendments.py (개정세법 PDF 해설서 파싱)
+pdfplumber>=0.11
+
+# ---------------- 한국어 형태소 ----------------
+# general_settings.keyword_mode="kiwi" 일 때만 import 된다 (지연 import)
+kiwipiepy>=0.17
+
+# ---------------- 클라이언트 ----------------
+requests>=2.31
+prompt-toolkit>=3.0
+
+# ---------------- 개발 ----------------
+pytest>=8.0
+pytest-asyncio>=0.23
+
+# ---------------- 선택 ----------------
+# build_testset.py --engine gemini 를 쓸 때만
+# google-generativeai>=0.5
+
+
+
+
+

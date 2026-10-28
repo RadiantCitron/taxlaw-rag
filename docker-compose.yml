@@ -1,0 +1,89 @@
+# === 세무 RAG 풀스택 Docker Compose 명세 (빈 DB 기동) ===
+# 서비스 3종: PostgreSQL(pgvector) + Neo4j + FastAPI 백엔드
+#
+# - DB는 비어 있는 상태로 뜬다. 코퍼스(데이터)는 이 저장소에 포함되어 있지 않으며,
+#   기동 후 db_build/ 스크립트로 직접 구축한다 (db_build/README.md 참고).
+# - PostgreSQL은 pgvector 확장 + database/init.sql 만 적용된다 (테이블·데이터 없음).
+#   빈 DB에서는 /health 가 "검색 테이블 없음" 경고를 내는 것이 정상이다.
+# - DB 데이터는 이름 있는 볼륨(pgdata, neo4jdata)에 남는다. `docker compose down` 으로는 지워지지 않고,
+#   `docker compose down -v` 로만 지워진다.
+# - 호스트 포트는 환경변수(.env 포함)로 바꿀 수 있다: PG_PORT NEO4J_HTTP_PORT NEO4J_BOLT_PORT API_PORT API_BIND
+# - 모든 포트(DB·API)는 기본 127.0.0.1 에만 바인딩한다. 클라우드(VPS 등)처럼 외부 접속이 필요하면 API_BIND=0.0.0.0 을 지정한다.
+#   (DB 포트는 항상 127.0.0.1)
+# - DB 비밀번호는 이 파일에 적지 않는다. .env 의 POSTGRES_PASSWORD, NEO4J_PASSWORD 를 직접 정해 넣는다
+#   (없으면 docker compose 가 오류 메시지와 함께 멈춘다). Neo4j 비밀번호는 8자 이상이어야 하고,
+#   Postgres 비밀번호는 접속 주소(TAX_DB_URI)에 들어가므로 영문·숫자만 쓰는 것을 권한다.
+name: taxlaw-rag
+
+services:
+  # 1. PostgreSQL 16 (pgvector)
+  db-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: tax-rag-postgres
+    ports:
+      - "127.0.0.1:${PG_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?.env 에 POSTGRES_PASSWORD 를 설정하세요}
+      - POSTGRES_DB=tax_rag_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U myuser -d tax_rag_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - tax-rag-net
+
+  # 2. Neo4j 지식그래프
+  db-neo4j:
+    image: neo4j:2026.09.0
+    container_name: tax-rag-neo4j
+    ports:
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-7474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-7687}:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?.env 에 NEO4J_PASSWORD 를 설정하세요}
+    volumes:
+      - neo4jdata:/data
+    restart: unless-stopped
+    networks:
+      - tax-rag-net
+
+  # 3. FastAPI 백엔드 웹 앱 및 Kiwi/PyTorch 파이프라인
+  tax-rag-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: tax-rag-api
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_PORT:-8000}:8000"
+    depends_on:
+      db-postgres:
+        condition: service_healthy
+    environment:
+      # 내부 도커 네트워크 통신용 주소 주입
+      - TAX_DB_URI=postgresql://myuser:${POSTGRES_PASSWORD:?.env 에 POSTGRES_PASSWORD 를 설정하세요}@db-postgres:5432/tax_rag_db
+      - NEO4J_URI=bolt://db-neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?.env 에 NEO4J_PASSWORD 를 설정하세요}
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?.env 에 NEO4J_PASSWORD 를 설정하세요}
+    # 호스트의 .env에서 OPENROUTER_API_KEY 등 주입 (없어도 실행 에러 방지)
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+    networks:
+      - tax-rag-net
+
+volumes:
+  pgdata:
+  neo4jdata:
+
+networks:
+  tax-rag-net:
+    driver: bridge

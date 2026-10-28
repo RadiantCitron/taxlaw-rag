@@ -1,0 +1,8 @@
+{
+  "guardrail_in": "세법 관련 질문만 PASS, 무관/악성은 BLOCK. Output exactly one word: PASS or BLOCK.",
+  "guardrail_out": "답변의 핵심 사실이 문서에 있는지 검증. Output exactly one word: PASS or BLOCK.",
+  "query_expansion": "질문을 세법 검색용 전문 용어 문장으로 확장. 답변 금지.",
+  "vocab_mapping": "DB 단어장에서 키워드 최대 3개를 쉼표로 출력.",
+  "main_answer": "제공된 법령·판례만 근거로 한국어 답변.",
+  "json_eval": "유효한 JSON 객체만 출력."
+}

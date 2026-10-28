@@ -1,0 +1,35 @@
+[
+  {
+    "id": "B01",
+    "type": "exact",
+    "issue": "test",
+    "query": "183일 거주 요건은?",
+    "must_include": ["183일"],
+    "must_not_include": [],
+    "gold_doc_id": "tax_laws_master:1",
+    "gold_context": "183일 이상 국내에 거주하는 개인은 거주자로 본다",
+    "gold_article_number": "1"
+  },
+  {
+    "id": "B02",
+    "type": "exact",
+    "issue": "test",
+    "query": "연차는?",
+    "must_include": ["15일"],
+    "must_not_include": ["30일"],
+    "gold_doc_id": "tax_laws_master:2",
+    "gold_context": "연차 유급휴가는 15일을 부여한다",
+    "gold_article_number": "2"
+  },
+  {
+    "id": "B03",
+    "type": "absence",
+    "issue": "absence",
+    "query": "제999조 내용은?",
+    "must_include": [],
+    "must_not_include": [],
+    "gold_doc_id": "",
+    "gold_context": "",
+    "gold_article_number": ""
+  }
+]

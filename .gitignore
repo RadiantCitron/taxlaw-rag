@@ -1,0 +1,89 @@
+# 보안 키 (절대 유출 금지)
+.env
+.env.*
+!.env.example
+.env.local
+session_users.json
+
+# 실행 산출물
+logs/
+baseline/
+testset/*.json
+!testset/.gitkeep
+
+# 무거운 라이브러리 및 가상환경 폴더 (용량 낭비 방지)
+node_modules/
+# 파이썬
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 운영체제 쓰레기 파일
+.DS_Store
+Thumbs.db
+
+# 프로그램 관련
+#.cursor/
+#.cursorignore
+.deepeval
+.vscode/
+__pycache__
+data/
+llm/
+local/
+
+# Hugging Face / 로컬 모델 캐시 (2GB+)
+**/models/hf/
+models/
+models/hf/
+
+# 실행 로그 (서비스 하위 포함)
+**/logs/
+logs/
+*.log
+debug-*.log
+
+# 백업 (폴더 + 루트 파일 + DB 덤프)
+백업/
+backup/
+backups/
+*backup*
+*백업*
+*.dump
+
+# 모델 가중치
+*.gguf
+
+# 잠금 파일은 커밋할 것 (재현성)
+!requirements.lock.txt
+.aider*
+*.bak
+
+# 원본 코퍼스 데이터
+raw_data/
+**/raw_data/
+
+# Docker 볼륨 데이터 및 아카이브 (대용량 파일 Git 추적 차단)
+docker_volumes/
+**/docker_volumes/
+pgdata/
+**/pgdata/
+neo4j_data/
+**/neo4j_data/
+*.tar
+*.tar.gz
+
+# 내부 개발 및 평가 부산물 격리
+AGENTS.md
+STATE.md
+ADR.md
+docs/
+.cursor/
+.cursorignore
+*.csv
+smoke*.json
+faith*.json
+eval_*.json
+amendments_plumber_full.json

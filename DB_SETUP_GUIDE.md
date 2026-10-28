@@ -1,0 +1,502 @@
+<!-- === PROJECT: taxlaw-rag | DOMAIN: 세법 | DB: tax_* === -->
+# 세무 RAG 데이터베이스 신규 재구축 작업 가이드북 (DB_SETUP_GUIDE.md)
+
+> ℹ️ **참고**: 이 저장소에는 데이터와 DB 덤프가 없습니다. 이 문서는 코퍼스를 **직접 구축**하는 절차입니다(루트 `README.md` 3절 참고). 문서의 `pgvector-db`는 개발자가 쓰던 컨테이너 이름이며, `deploy.sh`로 띄운 DB라면 `tax-rag-postgres`로 바꿔 읽으세요(사용자 `myuser`, 비밀번호는 `.env`의 `POSTGRES_PASSWORD`에 직접 정한 값).
+
+본 문서는 PostgreSQL 상에 신규 데이터베이스를 안전하게 생성하고, `0`으로 시작하는 5개의 마스터 파이프라인 스크립트를 단계별로 실행하여 마스터 세법 DB를 처음부터 재구축하는 표준 운영 절차서(SOP)입니다.
+
+---
+
+## 1. 데이터베이스 재구축 파이프라인 아키텍처 (Diagram)
+
+```
+[01 원천 데이터 수집] (01_collect_tax_data.py)
+   법제처 API (law.go.kr) / 국세청 개정세법 해설서 PDF
+                           │
+                           ▼
+   ./data/01_raw_data/
+      ├── laws/           (세법/시행령 JSON)
+      ├── cases/          (대법원 조세 판례 JSON)
+      ├── tribunal/       (조세심판원 결정례 JSON)
+      └── 2026_tax_amendments.pdf
+                           │
+                           ▼
+[02 & 03 파싱·청킹 및 기본 임베딩 적재]
+   - 모델: jhgan/ko-sroberta-multitask (768차원, 기본 모델)
+   - 타 모델 배제, 순수 기본 셋 구축
+   ├── 02_build_tax_db.py         ──> [1] tax_laws_master        (법령)
+   │                                  [2] tax_precedents_master  (판례)
+   │                                  [3] tax_tribunal_master    (심판원)
+   └── 03_build_tax_amendments.py ──> [4] tax_amendments_2026    (개정세법)
+   ═════════════════════════════════════════════════════════════════
+   ★ [기본 DB 구축 완료 단계] : 마스터 테이블 정확히 4개 생성 확인!
+   ═════════════════════════════════════════════════════════════════
+                           │
+                           ▼ (기본 4개 테이블 완성 후 필요 시 순차 진행)
+[04 비교 임베딩 테이블 추가 구축] (04_build_compare_embedding_tax.py)
+   - 원본 테이블의 본문(full_text)을 참조하여 임베딩만 분리 적재 (doc_id FK)
+   
+   ▶ 1차 임베딩 추가 (예: BAAI/bge-m3)
+      ├── tax_laws_master_cmp_bge_m3
+      ├── tax_precedents_master_cmp_bge_m3
+      ├── tax_tribunal_master_cmp_bge_m3
+      └── tax_amendments_2026_cmp_bge_m3
+      ★ 4개 테이블 추가 생성 (누적 총 8개 테이블)
+                           │
+   ▶ 2차 임베딩 추가 (예: intfloat/multilingual-e5-large)
+      ├── tax_laws_master_cmp_multilingual_e5_large
+      ├── tax_precedents_master_cmp_multilingual_e5_large
+      ├── tax_tribunal_master_cmp_multilingual_e5_large
+      └── tax_amendments_2026_cmp_multilingual_e5_large
+      ★ 또 4개 테이블 추가 생성 (누적 총 12개 테이블)
+                           │
+                           ▼
+[06 신·구 DB 정합성 및 무결성 대조 검증] (06_verify_db_migration.py)
+   기존 DB ◀──── (행 수 / 임베딩 수 / 컬럼 스키마 / MD5 해시) ────▶ 신규 DB
+```
+
+---
+
+## 2. 테이블 생성 및 증설 규칙 (필수 확인)
+
+### ① 기본 구축 단계 (기본 임베딩만 투입)
+- 파싱/청킹 및 기본 임베딩(`jhgan/ko-sroberta-multitask`, 768차원)만 생성하여 넣습니다.
+- 기본 구축 완료 시 public 스키마에는 **정확히 4개의 테이블**만 존재해야 합니다.
+  1. `tax_laws_master` (법령 조문 마스터)
+  2. `tax_precedents_master` (대법원 조세 판례 마스터)
+  3. `tax_tribunal_master` (조세심판원 결정례 마스터)
+  4. `tax_amendments_2026` (2026년 개정세법 해설 마스터)
+
+### ② 임베딩 추가 단계 (`04_build_compare_embedding_tax.py`)
+- 기본 테이블의 원문 데이터를 건드리지 않고, 새로운 모델로 벡터를 생성해 `_cmp_{model}` 형태의 복제 테이블을 만듭니다.
+- **임베딩 모델 1개를 추가할 때마다 원본 4개 테이블에 1:1로 대응하여 4개 테이블씩 추가**됩니다.
+
+| 구축 단계 | 실행 스크립트 | 누적 테이블 수 | 테이블 목록 |
+| :--- | :--- | :---: | :--- |
+| **기본 구축** | `02`번 + `03`번 | **4개** | `tax_laws_master`<br>`tax_precedents_master`<br>`tax_tribunal_master`<br>`tax_amendments_2026` |
+| **1차 임베딩 추가**<br>(예: `BAAI/bge-m3`) | `04`번 (`--model BAAI/bge-m3`) | **8개**<br>(+4개) | 기본 4개 + <br>`tax_laws_master_cmp_bge_m3`<br>`tax_precedents_master_cmp_bge_m3`<br>`tax_tribunal_master_cmp_bge_m3`<br>`tax_amendments_2026_cmp_bge_m3` |
+| **2차 임베딩 추가**<br>(예: `multilingual-e5-large`) | `04`번 (`--model intfloat/multilingual-e5-large`) | **12개**<br>(+4개) | 기존 8개 + <br>`*_cmp_multilingual_e5_large` (4개 테이블) |
+
+---
+
+## 3. 단계별 예상 소요 시간
+
+> 기준: 일반 개발 PC (NVIDIA RTX 3060급 GPU / 6코어 12스레드 CPU / 로컬 PostgreSQL)
+
+| 단계 | 작업 내용 | GPU 사용 시 | CPU 전용 시 | 비고 |
+| :---: | :--- | :---: | :---: | :--- |
+| **STEP 0** | 신규 DB 생성 및 확장(`vector`, `pg_trgm`) 활성화 | 약 30초 | 약 30초 | DDL 2줄 실행 |
+| **STEP 1** | 원천 데이터 수집 (`01_collect_tax_data.py`) | 0분 ~ 25분 | 0분 ~ 25분 | **`./data/01_raw_data/`가 이미 있으면 즉시 스킵 (0초)** |
+| **STEP 2** | 법령·판례·심판원 파싱/청킹 및 기본 임베딩 (`02_build_tax_db.py`) | 약 5분 ~ 10분 | 약 25분 ~ 40분 | 기본 768차원 임베딩 + GIN 인덱스 적용 |
+| **STEP 3** | 개정세법 PDF 파싱 및 기본 임베딩 (`03_build_tax_amendments.py`) | 약 2분 ~ 4분 | 약 5분 ~ 8분 | PDF 표/본문 파싱 + 기본 임베딩 적재 |
+| **CHECK** | **기본 테이블 4개 생성 확인** | 약 10초 | 약 10초 | SQL 카운트 조회 |
+| **STEP 4** | **추가 임베딩 1개 모델당** (`04_build_compare_embedding_tax.py`) | 약 15분 ~ 20분 | 약 45분 ~ 1시간 | 모델 1개당 4개 테이블 일괄 벡터화 |
+| **STEP 5** | 사전 청크 무결성 검증 (`05_verify_processed_chunks.py`) | 약 3초 | 약 3초 | 적재 전 역대조 검증 |
+| **STEP 6** | 신·구 DB 정합성 검증 (`06_verify_db_migration.py`) | 약 1분 ~ 2분 | 약 1분 ~ 2분 | 볼륨/스키마 및 전수 MD5 해시 대조 |
+| **합계** | **기본 4개 테이블 완공 기준 (원천 데이터 존재 시)** | **약 8분 ~ 15분** | **약 30분 ~ 50분** | |
+
+---
+
+## 4. 순서별 상세 실행 가이드 (PowerShell 명령어)
+
+> 본 가이드는 새 데이터베이스 이름을 **`tax_rag_db_new`** 로 명명하여 진행합니다.  
+> (기존 DB명: `tax_rag_db`, PostgreSQL 포트: `5432`, 기본 사용자: `myuser` 또는 `postgres`)
+
+---
+
+### [필수 사전 설정] Windows PowerShell 가상환경 및 UTF-8 실행 표준
+
+윈도우 PowerShell 환경에서 파이썬 명령어를 실행할 때 발생할 수 있는 2가지 대표 오류를 사전에 방지하기 위해 다음 규칙을 준수합니다:
+
+1. **가상환경(venv) 활성화**:
+   ```powershell
+   # 프로젝트 루트에서 가상환경 진입
+   .\venv\Scripts\Activate.ps1
+   ```
+   *(가상환경을 활성화하지 않고 실행 시 `ModuleNotFoundError: No module named 'llama_index...'` 에러가 발생합니다)*
+2. **콘솔 UTF-8 출력 옵션 (`-X utf8`) 필수 부여**:
+   - 윈도우 PowerShell의 기본 인코딩(CP949) 환경에서는 스크립트 진행 로그의 이모지(`🚀`, `✅`) 및 한글 특수문자 출력 시 `UnicodeEncodeError`로 프로세스가 비정상 종료될 수 있습니다.
+   - 따라서 모든 파이썬 스크립트 실행 시 **`python -X utf8 <스크립트명>`** 형태로 실행합니다.
+
+---
+
+### [STEP 0] 새 PostgreSQL 데이터베이스 생성 및 필수 확장 설치
+
+PostgreSQL에 새 데이터베이스를 생성하고 벡터 연산 및 텍스트 검색에 필요한 확장을 설치합니다.
+
+#### ■ A. 도커(Docker) 환경인 경우 (pgvector-db 컨테이너 사용 시) ★ 권장
+> ⚠️ **주의**: `-d postgres` 처럼 기존에 존재하는 기본 DB를 명시해야 `database "myuser" does not exist` 에러가 발생하지 않습니다.
+
+```powershell
+# 1. 새 데이터베이스 생성 (-d postgres 로 접속하여 생성)
+docker exec -it pgvector-db psql -U myuser -d postgres -c "CREATE DATABASE tax_rag_db_new;"
+
+# 2. 필수 확장(vector, pg_trgm) 설치 (Get-Content 파이프라인 활용)
+Get-Content database/init.sql | docker exec -i pgvector-db psql -U myuser -d tax_rag_db_new
+
+# 3. 정상 설치 확인 (plpgsql, vector, pg_trgm 3개 출력 확인)
+docker exec -it pgvector-db psql -U myuser -d tax_rag_db_new -c "SELECT extname FROM pg_extension;"
+```
+
+#### ■ B. 로컬 PC에 psql이 직접 설치된 경우
+```powershell
+# 1. 새 데이터베이스 생성
+psql -U postgres -h localhost -p 5432 -c "CREATE DATABASE tax_rag_db_new;"
+
+# 2. 필수 확장(vector, pg_trgm) 설치 (database/init.sql 활용)
+psql -U postgres -h localhost -p 5432 -d tax_rag_db_new -f database/init.sql
+
+# 3. 정상 설치 확인
+psql -U postgres -h localhost -p 5432 -d tax_rag_db_new -c "SELECT extname FROM pg_extension;"
+```
+> **정상 결과:** `plpgsql`, `vector`, `pg_trgm` 3개가 출력되면 정상입니다.
+
+---
+
+### [STEP 1] 원천 데이터 수집 (`01_collect_tax_data.py`)
+
+> ⚠️ **시간 절약 핵심**:  
+> 프로젝트 내 `./data/01_raw_data/` 폴더에 이미 법령, 판례, 심판원 json 파일과 `2026_tax_amendments.pdf` 파일이 보관되어 있다면, **이 단계를 실행하지 말고 바로 STEP 2로 넘어가십시오.**
+
+원천 데이터가 없거나 최신 데이터로 새로 받아야 하는 경우에만 실행합니다:
+```powershell
+# 법제처 API 키(LAW_OC_KEY)가 .env에 등록되어 있어야 합니다.
+python db_build/01_collect_tax_data.py --target all --limit 3
+```
+
+---
+
+### [STEP 2] 법령/판례/심판원 파싱·청킹 및 기본 임베딩 적재 (`02_build_tax_db.py`)
+
+기본 임베딩 모델(`jhgan/ko-sroberta-multitask`, 768차원)을 사용하여 3개의 마스터 테이블을 생성하고 적재합니다.
+
+```powershell
+python db_build/02_build_tax_db.py --step all --target all --db-name tax_rag_db_new --reset-db
+```
+- `--step all`: 원본 JSON 파싱/청킹(02_processed_chunks 저장) 및 DB 적재를 연속 수행
+- `--target all`: laws(법령), cases(판례), tribunal(심판원) 3종 전량 처리
+- `--db-name tax_rag_db_new`: 신규 DB 지정 (실수 방지)
+- `--reset-db`: 테이블이 혹시 남아있다면 깔끔하게 초기화 후 재생성
+- 적재 완료 후 full_text 컬럼에 `pg_trgm` GIN 인덱스가 자동 구성됩니다.
+- **생성 테이블**: `tax_laws_master`, `tax_precedents_master`, `tax_tribunal_master` (3개)
+
+---
+
+### [STEP 3] 2026 개정세법 PDF 파싱 및 기본 임베딩 적재 (`03_build_tax_amendments.py`)
+
+국세청 개정세법 해설서 PDF를 파싱·청킹하고 기본 임베딩을 적재하여 4번째 마스터 테이블을 완성합니다.
+
+```powershell
+python db_build/03_build_tax_amendments.py --step all --db-name tax_rag_db_new --reset-db
+```
+- `--step all`: PDF 파싱, 청킹 정제, DB 적재까지 원스톱 실행
+- `--db-name tax_rag_db_new`: 신규 DB 지정
+- **생성 테이블**: `tax_amendments_2026` (1개)
+
+---
+
+### [파싱 전용 단계] DB 적재 없이 지정 폴더에 청킹 JSON 파일만 저장하기 (`--step parse`)
+
+> 💡 **DB에 넣지 않고 파일만 먼저 뽑아내는 방법**:
+> 임베딩 모델(GPU) 로드나 DB 접속을 전혀 하지 않고, 원본 데이터(raw)를 청킹하여 지정한 폴더에 순수 JSON 파일들로만 빠르게 추출/저장합니다.
+
+```powershell
+# 1. 기본 폴더(./data/02_processed_chunks)에 파일만 저장할 때
+python -X utf8 db_build/02_build_tax_db.py --step parse --target all
+python -X utf8 db_build/03_build_tax_amendments.py --step parse
+
+# 2. 원하는 특정 지정 폴더(예: ./data/my_chunks)에 저장하고 싶을 때 (--processed-dir 옵션)
+python -X utf8 db_build/02_build_tax_db.py --step parse --target all --processed-dir "./data/my_chunks"
+python -X utf8 db_build/03_build_tax_amendments.py --step parse --processed-dir "./data/my_chunks"
+```
+- **동작 특징**: DB 연결 X, 임베딩 모델 로드 X, 수 초~수십 초 만에 파싱/청킹 파일 생성 완료.
+- **자동 호환 지원**: 
+  - `02_build_tax_db.py`: `cases`(또는 `precedents`), `tribunal`(또는 `tax_tribunal`) 폴더를 자동 감지하여 처리.
+  - `03_build_tax_amendments.py`: `2026년 개정세법 해설.pdf` 원본 파일 자동 감지 및 `2026_tax_amendments_processed.json` 표준 파일명으로 자동 저장.
+- **생성 파일 목록**:
+  1. `laws_processed.json` (법령 18종 전수 청킹 데이터, 2,903건)
+  2. `cases_processed.json` (조세 판례 전수 청킹 데이터, 약 20,015건)
+  3. `tribunal_processed.json` (조세심판원 결정례 전수 청킹 데이터, 15,928건)
+  4. `2026_tax_amendments_processed.json` (2026 개정세법 해설 청킹 데이터, 288건)
+
+---
+
+### [TIP] DB 적재 전 파일 무결성 사전 검증 (`05_verify_processed_chunks.py`)
+
+> 💡 **시간 절약 핵심**: 무거운 임베딩을 돌리기 전, 파싱/청킹 결과물(JSON)이 기존 DB와 일치하는지 또는 이전 가공 파일과 일치하는지 **짧은 시간에 검증**할 수 있습니다.
+
+```powershell
+# 1. 파일만 먼저 추출할 때 (--step parse 실행 후)
+python -X utf8 db_build/02_build_tax_db.py --step parse --target all
+python -X utf8 db_build/03_build_tax_amendments.py --step parse
+
+# 2-A. 기존 DB의 실제 데이터와 새로 뽑은 JSON 파일들 1:1 역대조 (임베딩 전 사전 확인)
+python -X utf8 db_build/05_verify_processed_chunks.py --mode db-dir --db-name tax_rag_db --processed-dir ./data/02_processed_chunks
+
+# 2-B. 백업된 이전 JSON 폴더와 신규 JSON 폴더 1:1 대조
+python -X utf8 db_build/05_verify_processed_chunks.py --mode dir --dir1 ./data/02_processed_chunks_backup --dir2 ./data/02_processed_chunks
+```
+* 여기서 `[PERFECT MATCH]`가 나오면 파싱/청킹 결과가 비교 대상과 같다는 뜻이므로, `--step ingest`로 임베딩 적재를 진행하면 됩니다.*
+
+#### ▶ [핀포인트 작업] 특정 타겟만 골라서 파싱 및 대조 검사하기
+
+전체 4종을 한꺼번에 돌리지 않고, 법령(`laws`), 판례(`cases`), 심판원(`tribunal`), 개정세법(`amendments`) 중 원하는 대상만 하나씩 골라 파싱한 후 즉시 검증하는 실무 추천 순서입니다:
+
+1. **법령(`laws`)만 파싱 ➔ 대조 검사 (완료: 2,903건)**:
+   ```powershell
+   # 1) 법령만 파싱 (laws_processed.json 생성)
+   python -X utf8 db_build/02_build_tax_db.py --step parse --target laws
+
+   # 2) 법령만 기존 DB(tax_laws_master)와 1:1 맞대조 (2,903건 전수 일치 확인)
+   python -X utf8 db_build/05_verify_processed_chunks.py --mode db-dir --db-name tax_rag_db --target laws
+   ```
+
+2. **조세심판원(`tribunal`)만 파싱 ➔ 대조 검사 (목표: 15,928건)**:
+   ```powershell
+   # 1) 심판원만 파싱 (tribunal_processed.json 생성)
+   python -X utf8 db_build/02_build_tax_db.py --step parse --target tribunal
+
+   # 2) 심판원만 기존 DB(tax_tribunal_master)와 1:1 맞대조 (15,928건 전수 일치 확인)
+   python -X utf8 db_build/05_verify_processed_chunks.py --mode db-dir --db-name tax_rag_db --target tribunal
+   ```
+
+3. **2026 개정세법(`amendments`)만 파싱 ➔ 대조 검사 (288건 전수 일치)**:
+   ```powershell
+   # 1) 개정세법만 파싱 (2026_tax_amendments_processed.json 생성)
+   python -X utf8 db_build/03_build_tax_amendments.py --step parse
+
+   # 2) 개정세법만 기존 DB(tax_amendments_2026)와 1:1 맞대조 (288건 전수 일치 확인)
+   python -X utf8 db_build/05_verify_processed_chunks.py --mode db-dir --db-name tax_rag_db --target amendments
+   ```
+
+4. **판례(`cases`)만 파싱 ➔ 대조 검사 (목표: 19,991건 전수 확보)**:
+   ```powershell
+   # 1) 판례만 파싱 (cases_processed.json 생성, 원천 파일 20,239개 순회로 약 1~2분 소요)
+   python -X utf8 db_build/02_build_tax_db.py --step parse --target cases
+
+   # 2) 판례만 기존 DB(tax_precedents_master)와 1:1 맞대조
+   python -X utf8 db_build/05_verify_processed_chunks.py --mode db-dir --db-name tax_rag_db --target cases
+   ```
+   > 💡 **판례 대조 검증 판정 해석 (필독!)**:
+   > - **검증 결과 요약**: 기존 DB(10,284건) vs 신규 파일(19,991건)로 인해 검증기 상에서는 건수 차이로 `[MISMATCH]`가 출력됩니다.
+   > - **실제 정상 판정 근거**:
+   >   1. 기존 DB에 있던 **10,283건의 본문 MD5 해시가 일치(`[PASS]`)**했습니다. 즉, 이 범위에서는 파싱 결과가 기존 DB와 같습니다.
+   >   2. 하드디스크 원천 파일은 20,239개인데 과거 기존 DB 구축 당시 절반(약 1만 건)만 적재되고 약 9,700건이 누락되어 있던 상태였습니다. 이번 파싱을 통해 **과거에 누락되었던 9,708건의 유효 판례를 전수 복원**해 낸 것입니다.
+   >   3. 기존 DB의 `PREC_unknown` 1건은 과거 식별자 누락으로 잘못 들어갔던 찌꺼기 레코드로서, 이번 파서에서 정상적으로 정제/제외되었습니다.
+   > - **결론**: 실패가 아니라 **기존 데이터와의 일치를 유지하면서 판례 건수가 늘어난(10,284건 ➔ 19,991건) 결과**이므로 다음 단계로 진행하면 됩니다.
+
+#### ▶ [검증 심층 가이드] 데이터 대조 원리 및 FAQ
+
+##### Q1. `python db_build/02_build_tax_db.py --step parse --target laws`는 실디비와 비교하는 명령어인가요?
+* **아닙니다.** 이 명령어는 비교기가 아니라 **순수 "가공 JSON 파일 생성기(생산자)"**입니다.
+* DB에 전혀 접속하지 않고, 원천 데이터(`01_raw_data`)를 읽어 정제된 청킹 파일(`data/02_processed_chunks/laws_processed.json`)을 생성하고 끝납니다.
+* 실제 비교 검증은 뒤이어 실행하는 **`05_verify_processed_chunks.py`**가 수행합니다.
+
+##### Q2. 파일끼리 비교하는 방법은 없나요? 처리 파일명이 같아야만 하나요?
+* **파일명이 완전히 달라도 파일끼리 1:1 대조가 가능합니다.**
+* **단일 파일 1:1 대조 (`--mode file`)**: 파일명이 무엇이든 두 파일을 직접 지정하면 내용과 ID를 대조합니다.
+  ```powershell
+  python db_build/05_verify_processed_chunks.py --mode file --file1 "과거_백업_법령.json" --file2 "새로_추출한_법령.json"
+  ```
+* **폴더 일괄 대조 (`--mode dir`)**: 폴더끼리 비교할 때는 두 폴더 내의 표준 파일명(`laws_processed.json`, `cases_processed.json` 등)을 자동으로 매칭하여 4개 파일을 한 번에 비교합니다.
+
+##### Q3. 파일끼리이든, 파일과 DB이든, DB와 DB이든 서로 같은 부분인지 어떻게 비교하나요? (대조 원리)
+파일명이나 테이블명이 아니라, 레코드 내부의 **고유 식별자(`id`)**와 **본문 텍스트(`full_text`)**를 기준으로 대조합니다.
+
+```
+[비교 메커니즘]
+  기준 데이터 (파일 또는 기존 DB)             대조 데이터 (파일 또는 신규 DB)
+  ─────────────────────────────────            ─────────────────────────────────
+  id: "소득세법_제12조"       <── 1:1 매칭 ──>  id: "소득세법_제12조"
+  full_text: "비과세소득..."                   full_text: "비과세소득..."
+                                     ▲
+                                     │ 공백 정규화 MD5 해시 대조 (내용 일치 검증)
+```
+1. **1단계 (ID 집합 대조)**: 양쪽 데이터의 ID 목록을 추출하여 누락된 ID나 새로 추가된 ID가 있는지 확인합니다.
+2. **2단계 (본문 내용 MD5 대조)**: 동일한 ID를 가진 데이터끼리 본문 텍스트(`full_text`)의 MD5 해시를 대조하여 본문의 변형이나 누락을 감지합니다.
+
+##### Q4. 같은 코드로 넣을 때만 비교 검증이 가능한가요?
+기본적인 ID 체계(`소득세법_제55조`, `PREC_2018두12345` 등)가 유지된다면 코드가 달라도 비교할 수 있으며, 2가지 목적으로 활용됩니다:
+1. **동일성 확인 (동일 코드 / 리팩토링 검증)**:
+   - "코드를 정리했는데 기존 데이터와 동일하게 파싱되는가?"를 검증 (결과: `[PERFECT MATCH]`)
+2. **변경점 추적 (Diff 검증 / 노이즈 필터링 개선 시)**:
+   - "전처리 필터 규칙을 개선했더니 기존 대비 어떤 ID의 본문이 몇 글자 달라졌는가?"를 확인
+   - 불일치가 발생하면 검증기가 상위 N건의 ID와 본문 프리뷰를 콘솔에 즉시 표시해 줍니다.
+
+##### 📊 한눈에 보는 4가지 비교 방식 요약표
+
+| 비교 유형 | 실행 명령어 | 비교 기준 | 소요 시간 |
+| :--- | :--- | :--- | :---: |
+| **파일 vs 파일** | `python db_build/05_verify_processed_chunks.py --mode file --file1 A.json --file2 B.json` | 두 파일의 `id` 및 `full_text` 해시 | 약 1초 |
+| **폴더 vs 폴더** | `python db_build/05_verify_processed_chunks.py --mode dir --dir1 폴더A --dir2 폴더B` | 4대 마스터 JSON 파일의 `id`/`full_text` 해시 | 약 2~3초 |
+| **기존 DB vs 신규 파일** | `python db_build/05_verify_processed_chunks.py --mode db-dir --db-name tax_rag_db` | DB 테이블의 `id`/`full_text`와 로컬 JSON 파일 대조 | 약 3초 |
+| **기존 DB vs 신규 DB** | `python db_build/06_verify_db_migration.py --db-old 기존DB --db-new 신규DB` | 양쪽 PostgreSQL 테이블의 행 수 / 임베딩 수 / MD5 | 약 1~2분 |
+
+##### Q5. `tribunal` 대신 `tax_tribunal` 같은 별명(Alias)을 명령어 옵션으로 써도 되나요?
+* **별명(Alias)은 지원되지 않으며, 반드시 정의된 고정 키워드를 사용해야 합니다.**
+* `02_build_tax_db.py`와 `05_verify_processed_chunks.py` 내부의 명령행 인자 파서(`argparse`)에 허용 단어가 엄격하게 고정(`choices`)되어 있습니다. 따라서 임의의 별칭(`tax_tribunal`, `precedents` 등)을 넣으면 파이썬이 `invalid choice: 'tax_tribunal' (choose from ...)` 에러를 띄우며 즉시 실행을 중단합니다.
+* **명칭이 혼동되는 이유**: 원천 데이터 폴더명, 저장되는 JSON 파일명, DB 테이블명, CLI 옵션명이 각각 달라 헷갈리기 쉽습니다.
+
+##### 📋 명령어 타겟 키워드(`--target`) vs 원천 폴더 vs 가공 파일 vs DB 테이블 명칭 맵핑표
+
+| 대상 | 명령어 옵션 (`--target`) | 원천 데이터 폴더/파일 (`01_raw_data`) | 가공 결과 파일명 (`02_processed_chunks`) | DB 적재 테이블명 |
+| :--- | :---: | :--- | :--- | :--- |
+| **법령** | **`laws`** | `laws/` | `laws_processed.json` | `tax_laws_master` |
+| **판례** | **`cases`** | `precedents/` (또는 `cases/`) | `cases_processed.json` | `tax_precedents_master` |
+| **심판원** | **`tribunal`** | `tax_tribunal/` (또는 `tribunal/`) | `tribunal_processed.json` | `tax_tribunal_master` |
+| **개정세법** | **`amendments`** *(검증기 전용)* | `2026년 개정세법 해설.pdf` | `2026_tax_amendments_processed.json` | `tax_amendments_2026` |
+| **전체 일괄** | **`all`** *(기본값)* | 전수 대상 | 전수 파일 4종 | 전수 테이블 4개 |
+
+> ⚠️ **주의**: 폴더명(`tax_tribunal`)이나 테이블명(`tax_tribunal_master`)이 익숙하다고 해서 `--target tax_tribunal`처럼 입력하면 안 되며, 명령어 실행 시에는 항상 접두어/접미어를 뺀 **`tribunal`**, **`cases`**, **`laws`**를 입력해야 합니다.
+
+##### Q6. 파이썬 실행 시 `-X utf8` 옵션은 꼭 붙여야 하나요? 안 붙여도 잘 되던데요?
+* **평상시 정상 실행된다면 굳이 안 붙이셔도 무방합니다.**
+* 파워쉘 콘솔 설정에 따라 이미 UTF-8 모드로 동작 중이거나, 출력되는 화면 텍스트에 인코딩 충돌 기호가 없는 경우 플래그 없이도 정상 실행됩니다.
+* `-X utf8`는 윈도우 기본 콘솔(CP949) 환경에서 진행률 이모지(`🚀`, `✅`)나 특수 기호 출력 시 예기치 않게 발생하는 `UnicodeEncodeError: 'cp949' codec can't encode...` 에러를 막아 주는 **'안전장치(보험)'** 역할을 합니다. 따라서 명령어가 길어서 불편하시다면 생략하고 실행하셔도 되며, 인코딩 에러가 발생할 때만 붙여주셔도 충분합니다.
+
+---
+
+### [CHECK] 기본 구축 완료 검증: 테이블 4개 확인하기
+
+이 시점에서 신규 DB에는 **정확히 4개의 기본 마스터 테이블**이 존재해야 합니다. 반드시 확인하고 다음 단계로 진행하세요.
+
+#### 1) 테이블 목록 및 개수 확인
+
+```powershell
+# [도커 환경]
+docker exec -it pgvector-db psql -U myuser -d tax_rag_db_new -c "
+SELECT table_name 
+FROM information_schema.tables 
+WHERE table_schema = 'public' 
+ORDER BY table_name;
+"
+
+# [로컬 psql 환경]
+psql -U postgres -h localhost -p 5432 -d tax_rag_db_new -c "
+SELECT table_name 
+FROM information_schema.tables 
+WHERE table_schema = 'public' 
+ORDER BY table_name;
+"
+```
+**[정상 출력 화면]**
+```text
+      table_name       
+-----------------------
+ tax_amendments_2026
+ tax_laws_master
+ tax_precedents_master
+ tax_tribunal_master
+(4 rows)  <--- 반드시 4개 테이블인지 확인!
+```
+
+#### 2) 각 테이블별 데이터 적재 건수 확인
+
+```powershell
+# [도커 환경]
+docker exec -it pgvector-db psql -U myuser -d tax_rag_db_new -c "
+SELECT 'tax_laws_master' AS tbl, count(*) AS cnt FROM tax_laws_master
+UNION ALL
+SELECT 'tax_precedents_master', count(*) FROM tax_precedents_master
+UNION ALL
+SELECT 'tax_tribunal_master', count(*) FROM tax_tribunal_master
+UNION ALL
+SELECT 'tax_amendments_2026', count(*) FROM tax_amendments_2026;
+"
+
+# [로컬 psql 환경]
+psql -U postgres -h localhost -p 5432 -d tax_rag_db_new -c "
+SELECT 'tax_laws_master' AS tbl, count(*) AS cnt FROM tax_laws_master
+UNION ALL
+SELECT 'tax_precedents_master', count(*) FROM tax_precedents_master
+UNION ALL
+SELECT 'tax_tribunal_master', count(*) FROM tax_tribunal_master
+UNION ALL
+SELECT 'tax_amendments_2026', count(*) FROM tax_amendments_2026;
+"
+```
+> 모든 테이블의 `cnt`가 0보다 큰 정상 데이터 건수를 나타내면 기본 구축 완료입니다.
+
+---
+
+### [STEP 4] 추가 임베딩 하나씩 추가하기 (`04_build_compare_embedding_tax.py`)
+
+기본 테이블 4개가 완성된 후, 검색 성능 비교용 임베딩 모델을 **하나씩 순차적으로** 추가합니다.  
+스크립트를 1회 실행할 때마다 기존 4개 원본 테이블에 대해 **비교 테이블 4개가 새로 추가**됩니다.
+
+#### (1) 1차 추가 모델: `BAAI/bge-m3` 추가
+```powershell
+# batch-size는 GPU VRAM에 맞게 조정 (8GB 이하 VRAM일 경우 32 권장)
+python db_build/04_build_compare_embedding_tax.py --model BAAI/bge-m3 --db-name tax_rag_db_new --batch-size 32
+```
+*실행 후 확인: 테이블이 4개 추가되어 **총 8개**가 됩니다.*
+- 추가된 테이블 4개:
+  1. `tax_laws_master_cmp_bge_m3`
+  2. `tax_precedents_master_cmp_bge_m3`
+  3. `tax_tribunal_master_cmp_bge_m3`
+  4. `tax_amendments_2026_cmp_bge_m3`
+
+#### (2) 2차 추가 모델: `intfloat/multilingual-e5-large` 추가 (필요 시)
+```powershell
+python db_build/04_build_compare_embedding_tax.py --model intfloat/multilingual-e5-large --db-name tax_rag_db_new --batch-size 32
+```
+*실행 후 확인: 또 4개가 추가되어 **총 12개**가 됩니다.*
+- 추가된 테이블 4개:
+  1. `tax_laws_master_cmp_multilingual_e5_large`
+  2. `tax_precedents_master_cmp_multilingual_e5_large`
+  3. `tax_tribunal_master_cmp_multilingual_e5_large`
+  4. `tax_amendments_2026_cmp_multilingual_e5_large`
+
+#### [CHECK] 임베딩 추가 후 테이블 개수 재확인
+
+```powershell
+# [도커 환경]
+docker exec -it pgvector-db psql -U myuser -d tax_rag_db_new -c "
+SELECT count(*) AS total_tables 
+FROM information_schema.tables 
+WHERE table_schema = 'public';
+"
+
+# [로컬 psql 환경]
+psql -U postgres -h localhost -p 5432 -d tax_rag_db_new -c "
+SELECT count(*) AS total_tables 
+FROM information_schema.tables 
+WHERE table_schema = 'public';
+"
+```
+- 모델 1개 추가 시: `total_tables = 8`
+- 모델 2개 추가 시: `total_tables = 12`
+
+---
+
+### [STEP 6] 신·구 DB 정합성 및 무결성 대조 검증 (`06_verify_db_migration.py`)
+
+기존 DB(`tax_rag_db`)와 신규 재구축 DB(`tax_rag_db_new`)의 데이터를 대조하여 데이터 누락이나 깨짐이 없는지 전수 검증합니다.
+
+#### 1) 볼륨 및 스키마 검증 (약 10초)
+```powershell
+# DB 계정이 myuser 인 경우 (--user, --password 옵션 지정)
+python db_build/06_verify_db_migration.py --db-old tax_rag_db --db-new tax_rag_db_new --user myuser --password YOUR_PASSWORD --show-info --mode volume
+```
+- 양쪽 DB의 확장 설치 현황, 컬럼 데이터 타입, 총 행 수, 임베딩 벡터 생성 건수를 대조합니다.
+
+#### 2) 텍스트 본문 전수 MD5 해시 대조 (정밀 검증, 약 1~2분)
+```powershell
+python db_build/06_verify_db_migration.py --db-old tax_rag_db --db-new tax_rag_db_new --user myuser --password YOUR_PASSWORD --mode content
+```
+- 레코드 ID 집합 대조 및 `MD5(full_text)` 해시값을 1:1 비교합니다.
+- **출력 결과에서 아래 메시지가 뜨면 두 DB의 본문이 같다는 뜻입니다**:
+  - `[ID 비교] ✅ 모든 ID가 정확히 일치합니다.`
+  - `[내용 비교] ✅ 텍스트 본문(full_text) 내용 100% 일치`
+
+---
+
+## 5. 실수 방지 핵심 체크리스트 (Fail-Safe Checklist)
+
+| 번호 | 체크 항목 | 실수 시 발생할 수 있는 문제 및 해결책 |
+| :---: | :--- | :--- |
+| **1** | **`--db-name` 옵션 확인** | 옵션을 빠뜨리면 `.env`에 정의된 기존 DB에 데이터가 덮어써질 수 있습니다. 반드시 `--db-name tax_rag_db_new`를 붙여 실행하세요. |
+| **2** | **확장(`init.sql`) 사전 설치** | DB 생성 후 `database/init.sql`을 실행하지 않으면 `02`번 스크립트 실행 시 `type "vector" does not exist` 에러가 발생합니다. |
+| **3** | **GPU OOM 방지 (`--batch-size`)** | `04_build_compare_embedding_tax.py` 실행 시 VRAM 부족 오류가 나면 `--batch-size 16` 또는 `32`로 낮춰서 실행하세요. |
+| **4** | **단계적 테이블 수 확인** | `02` + `03` 완료 시 반드시 **4개**, `04` 실행 1회당 **+4개씩 증가**하는 규칙을 SQL로 점검하세요. |
+| **5** | **운영 전환 시 `.env` 수정** | 검증이 모두 끝난 후 실서비스를 신규 DB로 바라보게 하려면 `.env` 파일의 `TAX_DB_URI`의 DB명을 `tax_rag_db_new`로 변경하고 서버를 재기동합니다. |

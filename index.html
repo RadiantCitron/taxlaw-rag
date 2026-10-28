@@ -1,0 +1,1248 @@
+<!DOCTYPE html>
+<!-- === PROJECT: taxlaw-rag | DOMAIN: 세법 | DB: tax_* === -->
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TaxLaw RAG Client</title>
+    
+    <style>
+        /* 폰트 설정: 영어는 Courier New, 한글은 굴림 */
+        :root {
+            --font-main: 'Courier New', 'Gulim', '굴림', sans-serif;
+            --bg-color: #f9f9f9;
+            --chat-bg: #ffffff;
+            --border-color: #e5e5e5;
+            --primary-color: #10a37f;
+            --text-main: #333333;
+            --text-muted: #888888;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #d1d1d1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: var(--font-main);
+            font-size: 14px;
+            line-height: 1.6;
+            display: flex;
+            justify-content: center;
+            height: 100dvh;
+            overflow: hidden;
+        }
+
+        /* 메인 앱 컨테이너 */
+        #app {
+            width: 100%;
+            max-width: 800px;
+            height: 100%;
+            background-color: var(--chat-bg);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            box-shadow: 0 0 15px rgba(0,0,0,0.05);
+            border-left: 1px solid var(--border-color);
+            border-right: 1px solid var(--border-color);
+        }
+
+        /* 상단 헤더 (세션 상태) */
+        header {
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(5px);
+            z-index: 10;
+        }
+        .header-title { font-weight: bold; font-size: 16px; }
+        #session-status { font-size: 12px; color: var(--text-muted); }
+
+        /* 출력창 영역 */
+        #output-container {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 20px;
+            scroll-behavior: smooth;
+        }
+        
+        /* 하단 입력 영역 */
+        #input-wrapper {
+            padding: 15px 20px 5px 20px;
+            background: linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,1) 20%);
+        }
+        
+        .input-box {
+            display: flex;
+            align-items: flex-end;
+            gap: 10px;
+            background-color: #ffffff;
+            border: 1px solid #d1d5db;
+            border-radius: 12px;
+            padding: 8px 12px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+            transition: border-color 0.2s;
+        }
+        .input-box:focus-within { border-color: var(--primary-color); }
+
+        /* 설정 버튼 (Tools 느낌) */
+        #settings-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 8px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+            margin-bottom: 2px;
+        }
+        #settings-btn:hover { background: #f3f4f6; color: var(--text-main); }
+        #settings-btn svg { width: 20px; height: 20px; }
+
+        #user-input {
+            flex-grow: 1;
+            border: none;
+            resize: none;
+            outline: none;
+            max-height: 150px;
+            min-height: 24px;
+            padding: 8px 0;
+            font-family: var(--font-main);
+            font-size: 15px;
+            line-height: 1.5;
+            background: transparent;
+        }
+        #user-input:disabled { background-color: transparent; color: #999; cursor: not-allowed; }
+
+        /* 전송/중지 버튼 */
+        #send-btn {
+            background-color: var(--text-main);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 2px;
+        }
+        #send-btn:hover { background-color: #000000; }
+        #send-btn:disabled { background-color: #e5e5e5; cursor: not-allowed; }
+        
+        #send-btn.stop-mode { background-color: #ef4444; }
+        #send-btn.stop-mode:hover { background-color: #dc2626; }
+
+        /* 쿼터 및 쿨다운 뱃지 (국룰 UI) */
+        .quota-badge {
+            font-size: 12px;
+            font-weight: 500;
+            padding: 5px 9px;
+            border-radius: 6px;
+            background: #f1f5f9;
+            color: #475569;
+            white-space: nowrap;
+            align-self: center;
+            margin-right: 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.2s ease;
+            user-select: none;
+        }
+        .quota-badge.cooldown {
+            background: #fef3c7;
+            color: #b45309;
+            font-weight: 600;
+            border: 1px solid #fde68a;
+        }
+        .quota-badge.exhausted {
+            background: #fee2e2;
+            color: #b91c1c;
+            font-weight: 600;
+            border: 1px solid #fca5a5;
+        }
+
+        /* 채팅창 시스템 공지 카드 (국룰 UX) */
+        .system-notice-card {
+            margin: 14px 0;
+            padding: 14px 16px;
+            border-radius: 10px;
+            border: 1px solid #e2e8f0;
+            background: #f8fafc;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            font-size: 13px;
+            line-height: 1.5;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+            animation: fadeIn 0.3s ease;
+        }
+        .system-notice-card.exhausted {
+            border-color: #fca5a5;
+            background: #fff5f5;
+            color: #991b1b;
+        }
+        .system-notice-card.cooldown {
+            border-color: #fde68a;
+            background: #fffbeb;
+            color: #92400e;
+        }
+        .system-notice-card .notice-icon {
+            font-size: 18px;
+            line-height: 1;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+        .system-notice-card .notice-title {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 3px;
+        }
+        .system-notice-card .notice-desc {
+            font-size: 12.5px;
+            opacity: 0.95;
+            word-break: break-word;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* 면책 조항 */
+        .disclaimer {
+            text-align: center;
+            font-size: 11px;
+            color: var(--text-muted);
+            padding: 8px 0 12px 0;
+        }
+
+        /* ─── 설정 모달 (팝업) ─── */
+        #settings-modal {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(2px);
+        }
+        .modal-content {
+            background: #fff;
+            width: 90%;
+            max-width: 500px;
+            max-height: 85%;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            overflow: hidden;
+        }
+        .modal-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+        }
+        .close-btn { cursor: pointer; font-size: 20px; color: #888; border: none; background: none; }
+        .close-btn:hover { color: #000; }
+        .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        /* 설정 폼 스타일 */
+        .opt-group {
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+        .opt-group-title { font-weight: bold; margin-bottom: 10px; color: #444; font-size: 13px; }
+        .opt-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; align-items: center; }
+        .opt-row:last-child { margin-bottom: 0; }
+        .opt-row label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+        select, input[type="number"], input[type="text"] {
+            font-family: var(--font-main);
+            font-size: 12px;
+            padding: 4px 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background: #fff;
+        }
+        input[type="checkbox"] { cursor: pointer; }
+
+        /* ─── 면책조항 오버레이 (초기 진입시) ─── */
+        #terms-overlay {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(255, 255, 255, 0.98);
+            z-index: 50;
+            flex-direction: column;
+            padding: 30px;
+        }
+        .terms-title { font-weight: bold; font-size: 18px; margin-bottom: 15px; color: #d9534f; }
+        #terms-scroll-box {
+            flex-grow: 1;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+            background: #fafafa;
+            white-space: pre-wrap;
+            font-size: 13px;
+        }
+        #checkbox-area { display: none; padding-top: 20px; text-align: center; }
+        #checkbox-area label { cursor: pointer; font-weight: bold; font-size: 14px; }
+
+        /* ─── 출력창 텍스트 스타일 ─── */
+        .user-query {
+            font-weight: bold;
+            color: #000;
+            margin: 20px 0 10px 0;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #eee;
+            font-size: 15px;
+            display: block;
+        }
+        .answer-typed { color: #111; white-space: pre-wrap; word-break: break-all; }
+        .log-line { display: block; color: #666; font-size: 12px; white-space: pre-wrap; margin-top: 2px; }
+        .log-system { display: block; margin: 8px 0; color: #ef4444; font-weight: bold; font-size: 13px; }
+        .notice-msg { display: block; margin: 8px 0; color: #3b82f6; font-size: 13px; }
+        .eval-msg { display: block; margin: 8px 0; color: #10b981; font-size: 13px; background: #ecfdf5; padding: 8px; border-radius: 6px; white-space: pre-wrap; }
+        .log-cancel { color: #ef4444; font-weight: bold; background-color: #fee2e2; padding: 6px 10px; border-radius: 6px; display: inline-block; margin-top: 10px; }
+        .prompt-trace { display: block; margin: 10px 0; padding: 10px; background: #f1f5f9; border-radius: 6px; color: #334155; font-size: 12px; white-space: pre-wrap; }
+        .error-box { display: block; margin: 10px 0; padding: 12px; border: 1px solid #fca5a5; background: #fef2f2; color: #991b1b; border-radius: 6px; white-space: pre-wrap; font-size: 13px; }
+        .field-error { border-color: #ef4444 !important; outline: 1px solid #ef4444; }
+
+        /* 서버 연결 상태 (출력창 상단) */
+        #conn-status {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: var(--chat-bg);
+            padding: 2px 0 10px 0;
+            font-weight: bold;
+            font-style: italic;
+            font-size: 13px;
+            color: #dc2626;
+            white-space: pre-wrap;
+        }
+        #conn-status.connected { color: #16a34a; }
+
+        /* 스피너 애니메이션 */
+        .spinner-svg { width: 18px; height: 18px; animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <header>
+            <div class="header-title">TaxLaw RAG</div>
+            <div id="session-status"></div>
+        </header>
+
+        <div id="output-container">
+            <div id="conn-status">[System] RAG 서버에 연결되지 않았습니다. 연결 시도 중... |</div>
+        </div>
+
+        <div id="input-wrapper">
+            <div class="input-box">
+                <!-- 설정 모달 열기 버튼 -->
+                <button id="settings-btn" title="설정">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                </button>
+                
+                <textarea id="user-input" placeholder="세무 질문을 입력하세요... (전송: Ctrl+Enter)" rows="1"></textarea>
+                
+                <div id="quota-badge" class="quota-badge" title="일일 질문 한도 및 쿨다운 상태">오늘: 5/5회</div>
+
+                <button id="send-btn" title="전송">
+                    <svg class="send-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+                </button>
+            </div>
+            <div class="disclaimer">※ 이 답변은 AI가 생성한 참고 정보이며, 전문적인 조언을 대신하지 않습니다.</div>
+        </div>
+
+        <!-- 면책조항 오버레이 -->
+        <div id="terms-overlay">
+            <div class="terms-title">
+                ⚠️ 면책 및 이용 안내
+                <a href="/DEMO_DISCLAIMER.txt" target="_blank" style="font-size:12px; font-weight:normal; margin-left:8px; color:var(--text-muted, #888); text-decoration:underline;">[전문 보기 (DEMO_DISCLAIMER.txt)]</a>
+            </div>
+            <div id="terms-scroll-box">[면책 및 이용 안내]
+
+본 프로그램은 개인 학습 및 기술 포트폴리오용 데모입니다.  
+제공되는 모든 답변은 인공지능이 생성한 참고 정보일 뿐이며, 
+전문적인 조언(법률, 세무, 의료, 재무 등)을 대신하지 않습니다.
+
+- AI 답변은 불완전하거나 실제와 다를 수 있습니다.
+- 이 답변을 근거로 중요한 결정이나 행동을 하지 마십시오.
+- 실제 문제는 반드시 해당 분야 전문가에게 상담받으시기 바랍니다.
+- 질문 시 개인정보(실명, 주민번호, 연락처 등)를 입력하지 마십시오.
+
+본 데모 이용으로 발생하는 결과에 대해 제작자는 책임을 지지 않습니다.  
+계속 이용하시면 위 내용에 동의한 것으로 간주됩니다.
+</div>
+            <div id="checkbox-area">
+                <input type="checkbox" id="agreeCheck">
+                <label for="agreeCheck"> 위 약관 및 면책조항을 충분히 인지하였고 동의합니다.</label>
+            </div>
+        </div>
+
+        <!-- 설정 모달 -->
+        <div id="settings-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <span>파이프라인 설정</span>
+                    <button class="close-btn" id="close-settings-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="opt-row" id="user-id-wrap" style="display:none">
+                        <label>아이디: <input type="text" id="opt-user-id" autocomplete="username" placeholder="아이디"></label>
+                    </div>
+                    
+                    <!-- 1. General Options -->
+                    <div class="opt-group">
+                        <div class="opt-group-title">기본 설정 (General)</div>
+                        <div class="opt-row">
+                            <label>LLM: <select id="opt-llm"></select></label>
+                        </div>
+                        <div class="opt-row">
+                            <label>Embed: <select id="opt-embed"></select></label>
+                        </div>
+                        <div class="opt-row">
+                            <label><input type="checkbox" id="opt-graphdb"> Graph DB</label>
+                        </div>
+                        <div class="opt-row">
+                            <label><input type="checkbox" id="src-laws" checked> 법령</label>
+                            <label><input type="checkbox" id="src-prec" checked> 판례</label>
+                            <label><input type="checkbox" id="src-trib" checked> 심판</label>
+                            <label><input type="checkbox" id="src-amend" checked> 개정해설</label>
+                        </div>
+                        <div class="opt-row">
+                            <label>Query Mode: 
+                                <select id="opt-query-mode">
+                                    <option value="none" selected>None (원문)</option>
+                                    <option value="expansion">Expansion (확장)</option>
+                                    <option value="vocab_mapping">Vocab Mapping (단어장)</option>
+                                </select>
+                            </label>
+                            <label>Keyword:
+                                <select id="opt-keyword-mode">
+                                    <option value="trigram" selected>Trigram</option>
+                                    <option value="kiwi">Kiwi (형태소)</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="opt-row">
+                            <label>Log: 
+                                <select id="opt-log">
+                                    <option value="1">Error</option>
+                                    <option value="3" selected>Info</option>
+                                    <option value="5">Debug</option>
+                                </select>
+                            </label>
+                            <label><input type="checkbox" id="opt-guardrail" checked> Guardrails</label>
+                            <label><input type="checkbox" id="opt-trace-prompts"> Trace prompts</label>
+                        </div>
+                        <div class="opt-row">
+                            <label>Fusion Mode: 
+                                <select id="opt-fusion-mode">
+                                    <option value="rrf" selected>RRF (순위 기반)</option>
+                                    <option value="score_based">Score (점수 기반)</option>
+                                </select>
+                            </label>
+                            <label>Alpha: <input type="number" id="opt-alpha" value="0.5" step="0.1" min="0" max="1" style="width:50px;"></label>
+                        </div>
+                    </div>
+
+                    <!-- 2. Reranking Options -->
+                    <div class="opt-group">
+                        <div class="opt-group-title">리랭킹 설정 (Reranking)</div>
+                        <div class="opt-row">
+                            <label><input type="checkbox" id="opt-rerank-enable"> Enable</label>
+                            <label>Top-K: <input type="number" id="opt-rerank-topk" value="3" min="1" style="width:40px;"></label>
+                            <label>Min Score: <input type="number" id="opt-rerank-minscore" value="0.0" step="0.1" style="width:50px;"></label>
+                        </div>
+                        <div class="opt-row">
+                            <label>Model: <select id="opt-rerank-model"></select></label>
+                        </div>
+                    </div>
+
+                    <!-- 3. DeepEval Options -->
+                    <div class="opt-group">
+                        <div class="opt-group-title">평가 설정 (DeepEval)</div>
+                        <div class="opt-row">
+                            <label><input type="checkbox" id="opt-eval-enable"> Enable</label>
+                            <label>Thres: <input type="number" id="opt-eval-thres" value="0.5" step="0.1" min="0" max="1" style="width:50px;"></label>
+                            <label><input type="checkbox" id="opt-eval-strict"> Strict</label>
+                        </div>
+                        <div class="opt-row">
+                            <label>Judge: <select id="opt-eval-model"></select></label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "http://127.0.0.1:8000"; 
+        
+        const input = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const quotaBadge = document.getElementById('quota-badge');
+        const output = document.getElementById('output-container');
+        const sessionStatus = document.getElementById('session-status');
+        
+        // 고유 디바이스 ID 관리 (localStorage 영구 보관)
+        function getOrCreateDeviceId() {
+            let id = localStorage.getItem("tax_device_id");
+            if (!id) {
+                id = "dev_" + (window.crypto && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 12));
+                localStorage.setItem("tax_device_id", id);
+            }
+            return id;
+        }
+        const deviceId = getOrCreateDeviceId();
+
+        // 쿼터 & 쿨다운 상태 관리
+        let quotaTimer = null;
+        let quotaState = {
+            allowed: true,
+            daily_limit: 5,
+            used_today: 0,
+            remaining_today: 5,
+            cooldown_sec: 900,
+            cooldown_remaining_sec: 0,
+            reason: null,
+            message: ""
+        };
+
+        function appendSystemNotice(type, title, desc) {
+            const card = document.createElement("div");
+            card.className = `system-notice-card ${type}`;
+            const icon = type === 'exhausted' ? '🛑' : '⏳';
+            card.innerHTML = `
+                <div class="notice-icon">${icon}</div>
+                <div class="notice-body">
+                    <div class="notice-title">${title}</div>
+                    <div class="notice-desc">${desc}</div>
+                </div>
+            `;
+            output.appendChild(card);
+            scrollToBottom();
+        }
+
+        function applyQuotaState(quota) {
+            if (quotaTimer) {
+                clearInterval(quotaTimer);
+                quotaTimer = null;
+            }
+            quotaState = quota || quotaState;
+            if (!quotaState.enabled) {
+                quotaBadge.className = "quota-badge";
+                quotaBadge.textContent = "제한 없음";
+                return;
+            }
+
+            const limit = quotaState.daily_limit || 5;
+            const remaining = quotaState.remaining_today !== undefined ? quotaState.remaining_today : limit;
+            const cooldownRem = quotaState.cooldown_remaining_sec || 0;
+
+            if (remaining <= 0) {
+                // 1) 오늘 5회 모두 소진 (국룰: 버튼/입력창 비활성화 및 안내 교체)
+                quotaBadge.className = "quota-badge exhausted";
+                quotaBadge.textContent = `오늘: 0/${limit}회 (소진)`;
+                input.disabled = true;
+                input.placeholder = `오늘 질문 가능 횟수(${limit}회)를 모두 소진했습니다. 내일 00:00에 초기화됩니다.`;
+                if (!inFlight) sendBtn.disabled = true;
+            } else if (cooldownRem > 0) {
+                // 2) 15분 쿨다운 중 (국룰: 버튼 비활성화, 실시간 카운트다운 타이머 동작)
+                quotaBadge.className = "quota-badge cooldown";
+                let remSec = cooldownRem;
+
+                const renderTimer = (sec) => {
+                    const m = Math.floor(sec / 60);
+                    const s = sec % 60;
+                    const mm = m < 10 ? '0' + m : m;
+                    const ss = s < 10 ? '0' + s : s;
+                    quotaBadge.textContent = `⏳ ${mm}:${ss}`;
+                    input.placeholder = `15분 쿨다운 중입니다. (${m > 0 ? m + '분 ' : ''}${s}초 후 질문 가능)`;
+                };
+
+                renderTimer(remSec);
+                if (!inFlight) sendBtn.disabled = true;
+
+                quotaTimer = setInterval(() => {
+                    remSec--;
+                    if (remSec <= 0) {
+                        clearInterval(quotaTimer);
+                        quotaTimer = null;
+                        fetchQuota();
+                    } else {
+                        renderTimer(remSec);
+                    }
+                }, 1000);
+            } else {
+                // 3) 정상 상태
+                quotaBadge.className = "quota-badge";
+                quotaBadge.textContent = `오늘: ${remaining}/${limit}회`;
+                if (!inFlight) {
+                    input.disabled = false;
+                    sendBtn.disabled = false;
+                    input.placeholder = "세무 질문을 입력하세요... (전송: Ctrl+Enter)";
+                }
+            }
+        }
+
+        let exhaustedNoticeShown = false;
+
+        async function fetchQuota() {
+            try {
+                const resp = await fetch(`${API_URL}/quota`, {
+                    headers: { 'X-Device-Id': deviceId }
+                });
+                if (!resp.ok) return;
+                const data = await resp.json();
+                applyQuotaState(data);
+                if (data && data.remaining_today <= 0 && !exhaustedNoticeShown) {
+                    exhaustedNoticeShown = true;
+                    appendSystemNotice('exhausted', '일일 질문 한도(5회) 소진 안내', `오늘 무료 질문 한도(${data.daily_limit || 5}회)를 모두 소진하셨습니다. 내일 자정(00:00)에 초기화됩니다.`);
+                }
+                return data;
+            } catch (e) {}
+        }
+        fetchQuota(); // 페이지 접속 시 즉시 동기화
+        
+        // 모달 관련 요소
+        const modal = document.getElementById('settings-modal');
+        const settingsBtn = document.getElementById('settings-btn');
+        const closeBtn = document.getElementById('close-settings-btn');
+
+        // 모달 이벤트
+        settingsBtn.addEventListener('click', () => modal.style.display = 'flex');
+        closeBtn.addEventListener('click', () => modal.style.display = 'none');
+        window.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
+
+        let sessionId = null;
+        let presenceAbort = null;
+        let currentAbortController = null;
+        let inFlight = false;
+        let typingCancelled = false;
+
+        function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+        function parseSseBlock(block) {
+            let eventName = "message";
+            const dataLines = [];
+            for (const raw of String(block || "").split("\n")) {
+                const line = raw.replace(/\r$/, "");
+                if (line.startsWith("event:")) eventName = line.slice(6).trim();
+                else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+            }
+            const rawData = dataLines.join("\n");
+            let text = rawData;
+            let obj = null;
+            if (rawData) {
+                try {
+                    obj = JSON.parse(rawData);
+                    if (obj && typeof obj.text === "string") text = obj.text;
+                } catch (e) {
+                    text = rawData.replace(/<br\s*\/?>/gi, "\n");
+                }
+            }
+            return { event: eventName, text, obj, rawData };
+        }
+
+        function appendPlain(text, className) {
+            const span = document.createElement("span");
+            if (className) span.className = className;
+            else span.className = "log-line";
+            span.textContent = text;
+            output.appendChild(span);
+            output.appendChild(document.createElement("br"));
+        }
+
+        function formatEvalPayload(payload) {
+            if (!payload || typeof payload !== "object") return "[EVAL] (형식 오류)";
+            const lines = [];
+            if (payload.error) lines.push("[EVAL 오류] " + String(payload.error));
+            const rows = payload.report || [];
+            for (const row of rows) {
+                if (!row || typeof row !== "object") continue;
+                const status = row.pass ? "PASS" : "FAIL";
+                const score = (typeof row.score === "number") ? row.score.toFixed(2) : String(row.score ?? "");
+                lines.push("[EVAL] " + (row.metric || "?") + ": " + score + "점 (" + status + ")");
+                if (row.reason) lines.push("  ↳ " + String(row.reason));
+            }
+            if (!lines.length) lines.push("[EVAL] 결과 없음");
+            return lines.join("\n");
+        }
+
+        function appendEvalPayload(payload) {
+            const wrap = document.createElement("div");
+            wrap.className = "eval-msg";
+            wrap.textContent = formatEvalPayload(payload);
+            output.appendChild(wrap);
+        }
+
+        function appendError(text) {
+            const wrap = document.createElement("div");
+            wrap.className = "log-system";
+            wrap.textContent = text;
+            output.appendChild(wrap);
+        }
+
+        const FIELD_TO_ID = {
+            "general_settings.alpha": "opt-alpha",
+            "general_settings.query_mode": "opt-query-mode",
+            "general_settings.keyword_mode": "opt-keyword-mode",
+            "general_settings.fusion_mode": "opt-fusion-mode",
+            "general_settings.log_level": "opt-log",
+            "general_settings.llm_model": "opt-llm",
+            "general_settings.embed_model": "opt-embed",
+            "rerank_settings.top_k": "opt-rerank-topk",
+            "rerank_settings.advanced.min_score": "opt-rerank-minscore",
+            "rerank_settings.advanced.model": "opt-rerank-model",
+            "eval_settings.eval_model": "opt-eval-model",
+            "eval_settings.threshold": "opt-eval-thres",
+        };
+
+        function unwrapEnvelope(body) {
+            if (!body || typeof body !== "object") return null;
+            if (body.error && typeof body.error === "object") return body;
+            if (body.detail && typeof body.detail === "object" && body.detail.error) return body.detail;
+            return null;
+        }
+
+        function highlightViolationFields(env) {
+            document.querySelectorAll(".field-error").forEach((el) => el.classList.remove("field-error"));
+            const err = (env && env.error) || {};
+            for (const v of (err.violations || [])) {
+                const id = FIELD_TO_ID[v.field];
+                const el = id ? document.getElementById(id) : null;
+                if (el) el.classList.add("field-error");
+            }
+        }
+
+        function renderErrorEnvelope(env) {
+            const err = (env && env.error) || {};
+            const box = document.createElement("div");
+            box.className = "error-box";
+            const add = (s) => {
+                box.appendChild(document.createTextNode(s == null ? "" : String(s)));
+                box.appendChild(document.createElement("br"));
+            };
+            add(`[요청 거부] ${err.code || "?"}`);
+            if (err.message) add(String(err.message));
+            for (const v of (err.violations || [])) {
+                add(`${v.field || ""} 보낸 값: ${String(v.given)} — ${String(v.reason || "")}`);
+                if (v.hint) add(String(v.hint));
+            }
+            if ((err.ignored_fields || []).length) {
+                add(`무시된 옵션: ${err.ignored_fields.join(", ")}`);
+            }
+            output.appendChild(box);
+            highlightViolationFields(env);
+            
+            const code = err.code || "";
+            if (code === "AUTH_REQUIRED" || code === "AUTH_FORBIDDEN") {
+                const wrap = document.getElementById("user-id-wrap");
+                if (wrap) wrap.style.display = "";
+                const idEl = document.getElementById("opt-user-id");
+                if (idEl) idEl.focus();
+            }
+        }
+
+        async function loadHealth() {
+            try {
+                const resp = await fetch(`${API_URL}/health`);
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const login = !!(data.boot && data.boot.login_mode);
+                const wrap = document.getElementById("user-id-wrap");
+                if (wrap) wrap.style.display = login ? "" : "none";
+                const idEl = document.getElementById("opt-user-id");
+                if (idEl && !idEl.value) {
+                    idEl.value = localStorage.getItem("taxlaw_rag_user_id") || "";
+                }
+            } catch (e) {}
+        }
+        loadHealth();
+
+        async function typeAnswer(text) {
+            const span = document.createElement("span");
+            span.className = "answer-typed";
+            output.appendChild(span);
+            const parts = String(text || "").split("\n");
+            for (let i = 0; i < parts.length; i++) {
+                for (const ch of parts[i]) {
+                    if (typingCancelled) return;
+                    span.appendChild(document.createTextNode(ch));
+                    scrollToBottom();
+                    await sleep(15);
+                }
+                if (i < parts.length - 1) {
+                    if (typingCancelled) return;
+                    span.appendChild(document.createElement("br"));
+                    scrollToBottom();
+                }
+            }
+        }
+
+        async function loadCatalogs() {
+            const llmSel = document.getElementById('opt-llm');
+            const evalSel = document.getElementById('opt-eval-model');
+            const embedSel = document.getElementById('opt-embed');
+            const rerankSel = document.getElementById('opt-rerank-model');
+            try {
+                const [llmResp, embedResp, rerankResp] = await Promise.all([
+                    fetch(`${API_URL}/llm/models`),
+                    fetch(`${API_URL}/embed/models`),
+                    fetch(`${API_URL}/rerank/models`),
+                ]);
+                if (!llmResp.ok) throw new Error(`HTTP ${llmResp.status}`);
+                const data = await llmResp.json();
+                const models = data.models || [];
+                const defaultId = data.default_id || (models[0] ? models[0].id : '');
+                const openrouter = models.filter((m) => String(m.id || '').startsWith('openrouter:'));
+                const local = models.filter((m) => String(m.id || '').startsWith('local:'));
+
+                const fill = (sel) => {
+                    sel.innerHTML = '';
+                    if (local.length > 0) {
+                        const groups = [['OpenRouter', openrouter], ['Local', local]];
+                        for (const [label, items] of groups) {
+                            if (!items.length) continue;
+                            const group = document.createElement('optgroup');
+                            group.label = label;
+                            for (const m of items) {
+                                const opt = document.createElement('option');
+                                opt.value = m.id;
+                                opt.textContent = m.label || m.id;
+                                group.appendChild(opt);
+                            }
+                            sel.appendChild(group);
+                        }
+                    } else {
+                        for (const m of openrouter) {
+                            const opt = document.createElement('option');
+                            opt.value = m.id;
+                            opt.textContent = m.label || m.id;
+                            sel.appendChild(opt);
+                        }
+                    }
+                };
+                fill(llmSel);
+                fill(evalSel);
+                const prefer = (defaultId && models.find((m) => m.id === defaultId)) || models[0];
+                if (prefer) { llmSel.value = prefer.id; evalSel.value = prefer.id; }
+
+                const embedData = embedResp.ok ? await embedResp.json() : { models: [] };
+                const embedDefault = embedData.default_id || '';
+                for (const m of (embedData.models || [])) {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.textContent = (m.default || m.indexed) ? `${m.label || m.id} (기본)` : `${m.label || m.id} (비교)`;
+                    if (embedDefault ? m.id === embedDefault : m.indexed) opt.selected = true;
+                    embedSel.appendChild(opt);
+                }
+
+                const rerankData = rerankResp.ok ? await rerankResp.json() : { models: [] };
+                for (const m of (rerankData.models || [])) {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.textContent = m.label || m.id;
+                    rerankSel.appendChild(opt);
+                }
+            } catch (e) {
+                appendError("[Error] 모델 목록을 불러오지 못했습니다. 서버를 확인하세요.");
+            }
+        }
+        loadCatalogs();
+
+        const connStatusEl = document.getElementById('conn-status');
+        const SPINNER_CHARS = ['|', '/', '-', '\\'];
+        let connSpinnerTimer = null;
+        let connSpinnerIdx = 0;
+        let connSpinnerBase = '';
+
+        function stopConnSpinner() {
+            if (connSpinnerTimer) {
+                clearInterval(connSpinnerTimer);
+                connSpinnerTimer = null;
+            }
+        }
+
+        function startConnSpinner(baseText) {
+            stopConnSpinner();
+            connSpinnerBase = baseText;
+            connSpinnerIdx = 0;
+            const tick = () => {
+                connStatusEl.textContent = connSpinnerBase + ' ' + SPINNER_CHARS[connSpinnerIdx % 4];
+                connSpinnerIdx++;
+            };
+            tick();
+            connSpinnerTimer = setInterval(tick, 100);
+        }
+
+        function showConnDisconnected() {
+            connStatusEl.classList.remove('connected');
+            startConnSpinner('[System] RAG 서버에 연결되지 않았습니다. 연결 시도 중...');
+        }
+
+        function showConnFull() {
+            connStatusEl.classList.remove('connected');
+            startConnSpinner('[System] RAG 서버 접속 정원이 가득 찼습니다. 연결 시도 중...');
+        }
+
+        function showConnConnected() {
+            stopConnSpinner();
+            connStatusEl.classList.add('connected');
+            connStatusEl.textContent = '[System] RAG 서버에 연결되었습니다. 질문을 입력하세요.';
+        }
+
+        async function refreshSessionStatus() {
+            if (!sessionId) {
+                sessionStatus.textContent = '';
+                return;
+            }
+            try {
+                const resp = await fetch(`${API_URL}/status`);
+                if (!resp.ok) return;
+                const data = await resp.json();
+                const short = sessionId.slice(0, 8);
+                const c = data.connected || {};
+                sessionStatus.textContent = `세션 ${short} · 접속 ${c.current ?? 0}/${c.max ?? 10}`;
+            } catch (e) {}
+        }
+
+        async function maintainSession() {
+            showConnDisconnected();
+            while (true) {
+                presenceAbort = new AbortController();
+                let wasFull = false;
+                try {
+                    const resp = await fetch(`${API_URL}/session/connect`, { signal: presenceAbort.signal });
+                    if (resp.status === 503) {
+                        wasFull = true;
+                        showConnFull();
+                        throw new Error(`session HTTP ${resp.status}`);
+                    }
+                    if (!resp.ok || !resp.body) throw new Error(`session HTTP ${resp.status}`);
+                    const reader = resp.body.getReader();
+                    const decoder = new TextDecoder('utf-8');
+                    let buffer = '';
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        const parts = buffer.split('\n\n');
+                        buffer = parts.pop();
+                        for (const block of parts) {
+                            const parsed = parseSseBlock(block);
+                            const payload = parsed.obj;
+                            if (!payload || typeof payload !== "object") continue;
+                            if (payload.event === 'connected' && payload.session_id) {
+                                sessionId = payload.session_id;
+                                showConnConnected();
+                                refreshSessionStatus();
+                            }
+                        }
+                    }
+                } catch (e) {
+                    if (e && e.name === 'AbortError') return;
+                }
+                sessionId = null;
+                sessionStatus.textContent = '';
+                if (!wasFull) showConnDisconnected();
+                await sleep(4000);
+            }
+        }
+        maintainSession();
+        setInterval(refreshSessionStatus, 4000);
+
+        // 입력창 자동 크기 조절
+        input.addEventListener('input', function() {
+            this.style.height = '24px'; 
+            this.style.height = Math.min(this.scrollHeight, 150) + 'px'; 
+        });
+
+        // 면책조항 (DEMO_DISCLAIMER.txt 동적 로드 + fallback)
+        let questionCount = 0; 
+        let targetCount = Math.floor(Math.random() * 2) + 3; 
+        const termsOverlay = document.getElementById('terms-overlay');
+        const termsScrollBox = document.getElementById('terms-scroll-box');
+        const checkboxArea = document.getElementById('checkbox-area');
+        const agreeCheck = document.getElementById('agreeCheck');
+
+        // 서버에서 DEMO_DISCLAIMER.txt 로드 (실패 시 HTML 내부 기본 문구 유지)
+        fetch('/DEMO_DISCLAIMER.txt')
+            .then(res => { if (res.ok) return res.text(); throw new Error('status ' + res.status); })
+            .then(txt => {
+                if (txt && txt.trim()) {
+                    termsScrollBox.textContent = txt.trim();
+                }
+            })
+            .catch(err => {
+                console.warn('[terms] DEMO_DISCLAIMER.txt 로드 실패 (기본값 사용):', err);
+            });
+
+        openTermsOverlay(); 
+
+        function openTermsOverlay() {
+            agreeCheck.checked = false;
+            input.disabled = true; 
+            sendBtn.disabled = true;
+            termsOverlay.style.display = 'flex'; 
+            setTimeout(() => {
+                if (termsScrollBox.scrollHeight <= termsScrollBox.clientHeight) checkboxArea.style.display = 'block';
+                else checkboxArea.style.display = 'none';
+            }, 10);
+        }
+
+        termsScrollBox.addEventListener('scroll', () => {
+            if (termsScrollBox.scrollHeight - termsScrollBox.scrollTop <= termsScrollBox.clientHeight + 10) {
+                checkboxArea.style.display = 'block';
+            }
+        });
+
+        agreeCheck.addEventListener('change', () => {
+            if (agreeCheck.checked) {
+                setTimeout(() => {
+                    termsOverlay.style.display = 'none';
+                    input.disabled = false;
+                    sendBtn.disabled = false;
+                    input.focus();
+                    questionCount = 0;
+                    targetCount = Math.floor(Math.random() * 2) + 3;
+                }, 200);
+            }
+        });
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                e.preventDefault(); 
+                sendBtn.click();    
+            }
+        });
+
+        // 전송 버튼 로직
+        sendBtn.addEventListener('click', async () => {
+            if (currentAbortController) {
+                typingCancelled = true;
+                currentAbortController.abort();
+                currentAbortController = null;
+                return;
+            }
+            if (inFlight) return;
+
+            const question = input.value.trim();
+            if (!question) return;
+            if (!sessionId) { appendError("[Error] 서버 세션이 없습니다. 연결을 기다리세요."); return; }
+            
+            const userIdEl = document.getElementById("opt-user-id");
+            const userId = userIdEl ? userIdEl.value.trim() : "";
+            const userWrap = document.getElementById("user-id-wrap");
+            if (userWrap && userWrap.style.display !== "none" && !userId) {
+                appendError("[Error] 로그인 모드입니다. 아이디를 입력하세요.");
+                if (userIdEl) userIdEl.focus();
+                return;
+            }
+            if (userId) localStorage.setItem("taxlaw_rag_user_id", userId);
+
+            if (!document.getElementById('opt-llm').value) { appendError("[Error] LLM 목록이 없습니다. 서버를 확인하세요."); return; }
+            if (!document.getElementById('opt-embed').value) { appendError("[Error] 임베딩 모델이 없습니다. 서버를 확인하세요."); return; }
+            
+            const sources = [];
+            if (document.getElementById('src-laws').checked) sources.push('tax_laws_master');
+            if (document.getElementById('src-prec').checked) sources.push('tax_precedents_master');
+            if (document.getElementById('src-trib').checked) sources.push('tax_tribunal_master');
+            if (document.getElementById('src-amend').checked) sources.push('tax_amendments_2026');
+            if (!sources.length) { appendError("[Error] 검색할 테이블을 하나 이상 고르세요."); return; }
+            
+            inFlight = true;
+            typingCancelled = false;
+            
+            const payload = {
+                query: question,
+                general_settings: {
+                    llm_model: document.getElementById('opt-llm').value,
+                    embed_model: document.getElementById('opt-embed').value,
+                    log_level: parseInt(document.getElementById('opt-log').value),
+                    query_mode: document.getElementById('opt-query-mode').value,
+                    keyword_mode: document.getElementById('opt-keyword-mode').value,
+                    use_guardrails: document.getElementById('opt-guardrail').checked,
+                    trace_prompts: document.getElementById('opt-trace-prompts').checked,
+                    fusion_mode: document.getElementById('opt-fusion-mode').value,
+                    alpha: parseFloat(document.getElementById('opt-alpha').value),
+                    use_graphdb: document.getElementById('opt-graphdb').checked,
+                    sources: sources
+                },
+                rerank_settings: {
+                    enabled: document.getElementById('opt-rerank-enable').checked,
+                    top_k: parseInt(document.getElementById('opt-rerank-topk').value),
+                    advanced: {
+                        model: document.getElementById('opt-rerank-model').value,
+                        min_score: parseFloat(document.getElementById('opt-rerank-minscore').value)
+                    }
+                },
+                eval_settings: {
+                    enabled: document.getElementById('opt-eval-enable').checked,
+                    eval_model: document.getElementById('opt-eval-model').value,
+                    threshold: parseFloat(document.getElementById('opt-eval-thres').value),
+                    strict_mode: document.getElementById('opt-eval-strict').checked
+                }
+            };
+
+            input.value = '';
+            input.style.height = '24px'; 
+            input.disabled = true; 
+
+            currentAbortController = new AbortController();
+            const signal = currentAbortController.signal;
+
+            sendBtn.classList.add('stop-mode');
+            sendBtn.innerHTML = `<svg class="spinner-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12"></rect></svg>`;
+
+            appendPlain("> " + question, "user-query");
+            scrollToBottom();
+
+            try {
+                const headers = { 
+                    'Content-Type': 'application/json', 
+                    'X-Session-Id': sessionId,
+                    'X-Device-Id': deviceId
+                };
+                if (userId) headers['X-User-Id'] = userId;
+                
+                const response = await fetch(`${API_URL}/ask`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(payload),
+                    signal: signal
+                });
+
+                if (!response.ok) {
+                    const errBody = await response.json().catch(() => ({}));
+                    const env = unwrapEnvelope(errBody);
+                    if (env) {
+                        const err = env.error || {};
+                        if (err.code === "COOLDOWN_ACTIVE") {
+                            appendSystemNotice('cooldown', '15분 쿨다운 안내', err.message);
+                            fetchQuota();
+                            return;
+                        } else if (err.code === "DAILY_QUOTA_EXCEEDED") {
+                            appendSystemNotice('exhausted', '일일 질문 한도(5회) 소진 안내', err.message);
+                            fetchQuota();
+                            return;
+                        }
+                        renderErrorEnvelope(env); 
+                        return; 
+                    }
+                    throw new Error(typeof errBody.detail === "string" ? errBody.detail : (`HTTP ${response.status}`));
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let buffer = "";
+                let answerTyped = false;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const blocks = buffer.split('\n\n');
+                    buffer = blocks.pop();
+
+                    for (const block of blocks) {
+                        const parsed = parseSseBlock(block);
+                        if (!parsed.event && !parsed.text) continue;
+                        
+                        if (parsed.event === "done") {
+                            const doneObj = parsed.obj || {};
+                            if (doneObj.dropped_frames > 0) appendPlain(`[경고] dropped_frames=${doneObj.dropped_frames}`, "notice-msg");
+                            if (doneObj.partial && doneObj.partial.length) appendPlain(`[경고] 부분 실패: ${doneObj.partial.join(", ")}`, "notice-msg");
+                            if (doneObj.status === "rejected" || doneObj.status === "error") {
+                                const reason = doneObj.reason ? ` / ${doneObj.reason}` : "";
+                                appendPlain(`[스트림 종료: ${doneObj.status}${reason}]`, "log-system");
+                            }
+                            continue;
+                        }
+                        if (parsed.event === "error") {
+                            renderErrorEnvelope(parsed.obj || unwrapEnvelope(parsed.obj) || {error: {code: "PIPELINE_ERROR", message: parsed.text}});
+                            continue;
+                        }
+                        if (parsed.event === "eval") { appendEvalPayload(parsed.obj || {}); continue; }
+                        if (parsed.event === "notice") { appendPlain("[안내] " + parsed.text, "notice-msg"); continue; }
+                        
+                        if (parsed.event === "answer") {
+                            if (!answerTyped) {
+                                answerTyped = true;
+                                await typeAnswer(parsed.text);
+                            } else {
+                                appendPlain(parsed.text, "answer-typed");
+                            }
+                        } else if (parsed.event === "prompt") {
+                            appendPlain(parsed.text, "prompt-trace");
+                        } else if (parsed.event === "system") {
+                            appendPlain(parsed.text, "log-system");
+                        } else {
+                            appendPlain(parsed.text);
+                        }
+                        scrollToBottom();
+                    }
+                }
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    appendPlain("🛑 [작업이 사용자에 의해 중단되었습니다.]", "log-cancel");
+                } else {
+                    appendError("[Error] 서버 연결 실패: " + (error.message || String(error)));
+                }
+            } finally {
+                currentAbortController = null;
+                inFlight = false;
+                sendBtn.classList.remove('stop-mode');
+                sendBtn.innerHTML = `<svg class="send-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>`;
+                
+                // 질문 완료 후 쿼터 및 쿨다운 즉시 동기화 (선제 차감 반영)
+                const latestQuota = await fetchQuota();
+                if (latestQuota && latestQuota.remaining_today <= 0) {
+                    appendSystemNotice('exhausted', '일일 질문 한도(5회) 소진 안내', `오늘 무료 질문 한도(${latestQuota.daily_limit || 5}회)를 모두 소진하셨습니다. 내일 자정(00:00)에 초기화됩니다.`);
+                }
+                
+                scrollToBottom();
+                
+                questionCount++;
+                if (questionCount >= targetCount) openTermsOverlay();
+            }
+        });
+
+        function scrollToBottom() {
+            output.scrollTop = output.scrollHeight;
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "Dongjin-kr/ko-reranker",
+    "label": "ko-reranker"
+  },
+  {
+    "id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "label": "MiniLM-L-6-v2"
+  },
+  {
+    "id": "dragonkue/bge-reranker-v2-m3-ko", 
+    "label": "bge-reranker-v2-m3-ko"
+  }
+]

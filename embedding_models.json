@@ -1,0 +1,17 @@
+[
+  {
+    "id": "jhgan/ko-sroberta-multitask",
+    "label": "ko-sroberta-multitask",
+    "indexed": true
+  },
+  {
+    "id": "intfloat/multilingual-e5-large",
+    "label": "multilingual-e5-large",
+    "indexed": false
+  },
+  {
+    "id": "BAAI/bge-m3",
+    "label": "bge-m3 (비교용)",
+    "indexed": false
+  }
+]
